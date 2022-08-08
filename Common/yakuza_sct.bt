@@ -1,0 +1,165 @@
+//------------------------------------------------
+//--- 010 Editor v12.0.1 Binary Template
+//
+//      File: 
+//   Authors: Violet, Samuel Stark/TheTurboTurnip
+//   Version: 0.1
+//   Purpose: 
+//  Category: 
+// File Mask: *.sct, *gct
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+
+#include "common/include.h"
+
+if (ReadUInt(4) != 4278255616) {
+    LittleEndian();
+};
+if (ReadUInt(4) == 4278255616) {
+    BigEndian();
+};
+
+struct bounding_aa_box {
+    TVector3 center;
+    TVector3 extent;
+    float unk0;
+    float unk1;
+};
+struct header {
+    SetRandomBackColor();
+
+    char GCTD[4];
+    uint32 endianCheck;
+    uint32 unk_flags<format=hex,comment="probably flags?">;
+    uint32 fileSize;
+
+    uint32 table1Pointer<format=hex,comment="p_node?">;
+    uint32 node_num;
+
+    uint32 table2Pointer<format=hex,comment="p_shape?">;
+    uint32 shape_num;
+
+    uint32 table3Pointer<format=hex,comment="p_node_aabox?">;
+    uint32 table4Pointer<format=hex,comment="p_shape_aabox?">;
+
+    // Pointer to an array of vector3s
+    uint32 vector_pointer<format=hex>;
+    // If 0, just read until the end of the file
+    uint32 vector_num;
+
+    uint32 hit_filter<format=hex>;
+    uint32 node_depth<comment="maximum depth of the p_node tree">;
+    FSeek(0x40);
+    bounding_aa_box unk<comment="probably just a p_node_aabox">;
+    FSeek(0x84);
+    uint32 node_count<comment="might be number of leaf nodes">;
+    uint32 shape_count<comment="is there such a thing as a 'leaf' shape?">;
+    FSeek(0xe0);
+    uint16 checksum;
+    string Name;
+} Header;
+
+
+// Notes on p_node
+// 
+// p_note shows up in two ways:
+//    { X Y 0 0 }   (leaf node)
+// or { 0 0 X Y }   (branch node)
+// i.e. either shape_range_length and shape_range_start are 0, or tree_node_left/tree_node_right are both 0.
+//
+// I think this is an unbalanced binary tree, used to map points in space -> potentially relevant collision shapes.
+// Each node in the tree has a bounding box.
+// You start at node 0.
+// 1. If the current node is a branch, check the bounding boxes for the tree_node_left and tree_node_right nodes.
+//     If you are in the left bounding box, choose the left node and go to step 1.
+//     If you are in the right bounding box, choose the right node and go to step 1.
+//     (note - I am assuming the left and right nodes have exclusive bounding boxes i.e. you cannot be in both at once)
+// 2. Otherwise, if the current node is a leaf, the relevant collision shapes for you are in Shapes.p_shapes[shape_range_start..shape_range_start+shape_range_length-1]
+struct p_node {
+    uint32 shape_range_length;
+    // In o_grand.gct
+    uint32 shape_range_start;
+
+    // If nonzero, the p_node is a branch node (i.e. not a leaf node).
+    uint32 tree_node_left;
+    uint32 tree_node_right;
+};
+
+
+struct p_shape {
+    u16 unk<comment="increases in random amounts with subsequent shapes",format=hex>;
+    u16 unk2<comment="count of some sort?",format=hex>;
+    u32 unk3<format=hex>;
+
+    struct {
+        // Four indices into the vector buffer that make up a quad
+        u32 quadFace[4];
+        // An index into the vector buffer showing the normal vector of the quad
+        u32 normalVector<comment="vector should be normalized">;
+    } indices;
+
+    f32 D<comment="plane equation: n_x * x + n_y * y + n_z * z = D">;
+
+
+    FPush();
+    struct {
+        FSeek( Header.vector_pointer + (indices.quadFace[0] * sizeof(TVector3)) );
+        TVector3 quadCorner;
+        FSeek( Header.vector_pointer + (indices.quadFace[1] * sizeof(TVector3)) );
+        TVector3 quadCorner;
+        FSeek( Header.vector_pointer + (indices.quadFace[2] * sizeof(TVector3)) );
+        TVector3 quadCorner;
+        FSeek( Header.vector_pointer + (indices.quadFace[3] * sizeof(TVector3)));
+        TVector3 quadCorner;
+
+        FSeek( Header.vector_pointer + (indices.normalVector * sizeof(TVector3)) );
+        TVector3 quadNormal;
+    } vectors;
+    FPop();
+};
+
+
+struct p_node_aabox {
+    TVector3 center;
+    TVector3 extent;
+    f32 unk0;
+    u16 unk1<format=hex,comment="40C5, 70FF">;
+    u16 unk2<format=hex,comment="Usually 0x80FF">;
+};
+struct p_shape_aabox {
+    TVector3 center;
+    f32 sphere_radius<comment="radius of a sphere centered at 'center' that encompasses all points in the quad - might be slightly larger?">;
+    TVector3 box_extent;
+    u16 unk1<format=hex,comment="40C5, 70FF, 703A">;
+    u16 unk2<format=hex,comment="Usually 0x80FF">;
+};
+
+
+
+
+struct nodes {
+    FSeek(Header.table1Pointer);
+    SetRandomBackColor();
+    p_node p_nodes[Header.node_num];
+} Nodes;
+
+struct shapes {
+    FSeek(Header.table2Pointer);
+    SetRandomBackColor();
+    p_shape p_shapes[Header.shape_num]<optimize=false>;
+} Shapes;
+
+struct bboxes {
+    FSeek(Header.table3Pointer);
+    SetRandomBackColor();
+    p_node_aabox p_node_aaboxes[Header.node_num];
+
+    FSeek(Header.table4Pointer);
+    SetRandomBackColor();
+    p_shape_aabox p_shape_aaboxes[Header.shape_num];
+} BBoxes;
+
+FSeek(Header.vector_pointer);
+SetRandomBackColor();    
+TVector3 vectors[(FileSize() - 72 - FTell()) / sizeof(TVector3)]<bgcolor=0x00FF00>;
